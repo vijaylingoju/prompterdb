@@ -49,7 +49,7 @@ func (g *Gemini) GenerateSQL(prompt string, schema string) (string, error) {
 		return "", errors.New("Gemini configuration is incomplete")
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", g.Model, g.APIKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent?key=%s", g.Model, g.APIKey)
 
 	// Construct request body
 	payload := map[string]interface{}{
