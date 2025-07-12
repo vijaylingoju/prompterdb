@@ -22,7 +22,7 @@ func ConnectPostgres(name, uri string) error {
 func QueryPostgres(name, query string) ([]map[string]interface{}, error) {
 	pool, ok := pgPools[name]
 	if !ok {
-		return nil, fmt.Errorf("Postgres pool not found for: %s", name)
+		return nil, fmt.Errorf("postgres pool not found for: %s", name)
 	}
 
 	rows, err := pool.Query(context.Background(), query)
