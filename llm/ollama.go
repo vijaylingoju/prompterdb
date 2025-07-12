@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -52,4 +53,19 @@ func (o *Ollama) GenerateSQL(prompt string, schema string) (string, error) {
 	json.Unmarshal(bs, &result)
 
 	return result.Response, nil
+}
+
+func (o *Ollama) GenerateMongoQuery(prompt, schema string) (string, error) {
+	message := fmt.Sprintf(`Given this MongoDB schema:
+%s
+
+Write a JSON query response with this format:
+{
+  "collection": "your_collection",
+  "filter": { /* valid MongoDB filter */ }
+}
+
+Prompt: %s`, schema, prompt)
+
+	return o.GenerateSQL(message, schema)
 }

@@ -90,3 +90,18 @@ User Request: %s`, schema, prompt)
 
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
+
+func (g *Groq) GenerateMongoQuery(prompt, schema string) (string, error) {
+	message := fmt.Sprintf(`Given this MongoDB schema:
+%s
+
+Write a JSON query response with this format:
+{
+  "collection": "your_collection",
+  "filter": { /* valid MongoDB filter */ }
+}
+
+Prompt: %s`, schema, prompt)
+
+	return g.GenerateSQL(message, schema)
+}

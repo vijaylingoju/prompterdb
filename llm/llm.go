@@ -3,5 +3,6 @@ package llm
 
 type LLM interface {
 	GenerateSQL(prompt string, schema string) (string, error)
+	GenerateMongoQuery(prompt string, schema string) (string, error)
 	Name() string
 }

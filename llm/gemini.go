@@ -112,3 +112,18 @@ func (g *Gemini) GenerateSQL(prompt string, schema string) (string, error) {
 	query := result.Candidates[0].Content.Parts[0].Text
 	return strings.TrimSpace(query), nil
 }
+
+func (g *Gemini) GenerateMongoQuery(prompt, schema string) (string, error) {
+	message := fmt.Sprintf(`Given this MongoDB schema:
+%s
+
+Write a JSON query response with this format:
+{
+  "collection": "your_collection",
+  "filter": { /* valid MongoDB filter */ }
+}
+
+Prompt: %s`, schema, prompt)
+
+	return g.GenerateSQL(message, schema)
+}
