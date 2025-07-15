@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// STEP 3: Create LLM client (mock or actual)
-	llmClient, err := llm.NewGroq(os.Getenv("GROQ_API_KEY"), os.Getenv("GROQ_MODEL"))
+	llmClient, err := llm.NewGemini(os.Getenv("GEMINI_API_KEY"), os.Getenv("GEMINI_MODEL"))
 	if err != nil {
 		log.Fatalf("LLM initialization failed: %v", err)
 	}

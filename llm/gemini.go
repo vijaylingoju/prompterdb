@@ -16,7 +16,7 @@ type Gemini struct {
 	Model  string
 }
 
-func NewGemini(apiKey string) (*Gemini, error) {
+func NewGemini(apiKey string, model string) (*Gemini, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
@@ -25,9 +25,8 @@ func NewGemini(apiKey string) (*Gemini, error) {
 	}
 
 	// Check for model env override
-	model := os.Getenv("GEMINI_MODEL")
 	if model == "" {
-		model = "gemini-pro" // default to v1beta model
+		return nil, errors.New("❌ missing Google model")
 	}
 
 	return &Gemini{
