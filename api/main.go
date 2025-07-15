@@ -11,19 +11,11 @@ import (
 )
 
 func main() {
-	//use dotenv to load environment variables
+	//dotenv
 	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	apiKey := os.Getenv("GROQ_API_KEY")
-	model := os.Getenv("GROQ_MODEL")
 
-	if apiKey == "" {
-		log.Fatal("GROQ_API_KEY environment variable is not set")
-	}
-	if model == "" {
-		model = "llama-3.3-70b-versatile"
-	}
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: go run api/main.go \"your natural language prompt here\"")
 	}
@@ -46,7 +38,7 @@ func main() {
 	}
 
 	// STEP 3: Create LLM client (mock or actual)
-	llmClient, err := llm.NewGroq(apiKey, model)
+	llmClient, err := llm.NewGroq(os.Getenv("GROQ_API_KEY"), os.Getenv("GROQ_MODEL"))
 	if err != nil {
 		log.Fatalf("LLM initialization failed: %v", err)
 	}
