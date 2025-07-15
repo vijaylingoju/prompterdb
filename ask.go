@@ -98,7 +98,13 @@ Prompt: {{userPrompt}}
 			return nil, fmt.Errorf("mongo query generation failed: %w", err)
 		}
 
-		log.Println("🧠 Raw Mongo LLM response:", rawResponse)
+		// Clean and validate the MongoDB query
+		cleanedQuery := cleanMongoText(rawResponse)
+		if err := llm.ValidateMongo(cleanedQuery); err != nil {
+			return nil, fmt.Errorf("mongo query validation failed: %w", err)
+		}
+
+		log.Println(" Raw Mongo LLM response:", rawResponse)
 		cleaned := cleanMongoText(rawResponse)
 
 		var mongoQuery struct {
