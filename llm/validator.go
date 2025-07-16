@@ -61,7 +61,7 @@ func ValidateMongo(query string) error {
 	// Validate operation type
 	if opStr, ok := operation.(string); ok {
 		// Allowed operations
-		allowedOps := []string{"find", "insert", "update"}
+		allowedOps := []string{"find", "insert", "update", "aggregate"}
 		isValidOp := false
 		for _, allowed := range allowedOps {
 			if opStr == allowed {
@@ -89,6 +89,10 @@ func ValidateMongo(query string) error {
 			}
 			if _, ok := mongoQuery["update"]; !ok {
 				return errors.New("update operation requires update field")
+			}
+		case "aggregate":
+			if _, ok := mongoQuery["pipeline"]; !ok {
+				return errors.New("aggregate operation requires pipeline field")
 			}
 		}
 	} else {

@@ -12,6 +12,8 @@ import (
 	"github.com/vijaylingoju/prompterdb/db"
 	"github.com/vijaylingoju/prompterdb/engine"
 	"github.com/vijaylingoju/prompterdb/llm"
+	"github.com/vijaylingoju/prompterdb/templates"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error) {
@@ -24,6 +26,16 @@ func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error)
 		return nil, errors.New("schema is empty – call IntrospectAllSchemas() first")
 	}
 
+	// Initialize template manager
+	tm := templates.NewTemplateManager()
+	// Load templates from the default directory
+	if err := tm.LoadTemplatesFromDir("templates"); err != nil {
+		log.Printf("Warning: could not load templates: %v", err)
+	}
+
+	// Set the template manager for the LLM client
+	llmClient.SetTemplateManager(tm)
+
 	// STEP 1: Route to the most appropriate DB
 	targetDB, err := engine.RoutePrompt(context.Background(), userPrompt)
 	if err != nil {
@@ -34,15 +46,24 @@ func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error)
 		return nil, errors.New("invalid database configuration")
 	}
 
+	// Prepare the query request
+	req := llm.QueryRequest{
+		Prompt:     userPrompt,
+		Schema:     schema,
+		DBType:     strings.ToLower(string(targetDB.Type)),
+		CustomVars: make(map[string]interface{}),
+	}
+
 	switch targetDB.Type {
 	case config.Postgres:
+		req.QueryType = llm.QueryTypeSQL
 		// Step 2: Ask LLM to generate SQL
-		query, err := llmClient.GenerateSQL("Only return a valid SQL query without any explanation. "+userPrompt, schema)
+		resp, err := llmClient.GenerateQuery(req)
 		if err != nil {
 			return nil, fmt.Errorf("llm generation failed: %w", err)
 		}
 
-		query = cleanLLMQuery(query)
+		query := cleanLLMQuery(resp.Query)
 
 		// Step 3: Validate SQL
 		if err := llm.ValidateSQL(query); err != nil {
@@ -58,54 +79,33 @@ func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error)
 		if err != nil {
 			return nil, fmt.Errorf("query execution failed: %w", err)
 		}
-		return []map[string]interface{}{{"status": "success", "rows_affected": rowsAffected}}, nil
+		return []map[string]interface{}{
+			{"rows_affected": rowsAffected},
+		}, nil
 
 	case config.Mongo:
-		// Prompt to instruct LLM to give JSON with operation
-		llmTemplate := `
-You are an AI assistant that converts natural language into MongoDB operations.
-⚠️ Only respond with a valid JSON. Do NOT add explanation or markdown.
+		req.QueryType = llm.QueryTypeMongo
 
-JSON format must include:
-- "operation": one of ["find", "insert", "update", "delete"]
-- "collection": the collection name
-- For "find": "filter"
-- For "insert": "document"
-- For "update": "filter" and "update"
-- For "delete": "filter"
+		// Find the most relevant collection if not specified
+		collection := FindMostRelevantMongoCollection(userPrompt, targetDB.Name)
+		if collection == "" {
+			return nil, errors.New("could not infer MongoDB collection name from prompt")
+		}
+		req.CustomVars["Collection"] = collection
 
-Examples:
-
-Prompt: find all courses  
-Response: { "operation": "find", "collection": "courses", "filter": {} }
-
-Prompt: add new course with title mongodb and duration 4  
-Response: { "operation": "insert", "collection": "courses", "document": { "title": "mongodb", "duration": 4 } }
-
-Prompt: update duration of mongodb course to 6  
-Response: { "operation": "update", "collection": "courses", "filter": { "title": "mongodb" }, "update": { "$set": { "duration": 6 } } }
-
-Prompt: delete course titled mongodb  
-Response: { "operation": "delete", "collection": "courses", "filter": { "title": "mongodb" } }
-
-Prompt: {{userPrompt}}
-`
-
-		finalPrompt := strings.ReplaceAll(llmTemplate, "{{userPrompt}}", userPrompt)
-
-		rawResponse, err := llmClient.GenerateMongoQuery(finalPrompt, schema)
+		// Step 2: Generate MongoDB query using the template system
+		resp, err := llmClient.GenerateQuery(req)
 		if err != nil {
 			return nil, fmt.Errorf("mongo query generation failed: %w", err)
 		}
 
 		// Clean and validate the MongoDB query
-		cleanedQuery := cleanMongoText(rawResponse)
+		cleanedQuery := cleanMongoText(resp.Query)
 		if err := llm.ValidateMongo(cleanedQuery); err != nil {
 			return nil, fmt.Errorf("mongo query validation failed: %w", err)
 		}
 
-		log.Println(" Raw Mongo LLM response:", rawResponse)
-		cleaned := cleanMongoText(rawResponse)
+		log.Println("Raw Mongo LLM response:", cleanedQuery)
 
 		var mongoQuery struct {
 			Operation  string                 `json:"operation"`
@@ -113,17 +113,16 @@ Prompt: {{userPrompt}}
 			Filter     map[string]interface{} `json:"filter,omitempty"`
 			Document   map[string]interface{} `json:"document,omitempty"`
 			Update     map[string]interface{} `json:"update,omitempty"`
+			Pipeline   []bson.M               `json:"pipeline,omitempty"`
 		}
 
-		if err := json.Unmarshal([]byte(cleaned), &mongoQuery); err != nil {
-			return nil, fmt.Errorf("error parsing LLM Mongo response: %w\nRaw cleaned: %s", err, cleaned)
+		if err := json.Unmarshal([]byte(cleanedQuery), &mongoQuery); err != nil {
+			return nil, fmt.Errorf("error parsing LLM Mongo response: %w\nRaw response: %s", err, cleanedQuery)
 		}
 
+		// Use the collection from the template if not specified in the response
 		if mongoQuery.Collection == "" {
-			mongoQuery.Collection = FindMostRelevantMongoCollection(userPrompt, targetDB.Name)
-			if mongoQuery.Collection == "" {
-				return nil, errors.New("could not infer MongoDB collection name from prompt")
-			}
+			mongoQuery.Collection = collection
 		}
 
 		switch mongoQuery.Operation {
@@ -135,6 +134,8 @@ Prompt: {{userPrompt}}
 			return db.UpdateMongo(targetDB.Name, targetDB.DBName, mongoQuery.Collection, mongoQuery.Filter, mongoQuery.Update)
 		case "delete":
 			return db.DeleteMongo(targetDB.Name, targetDB.DBName, mongoQuery.Collection, mongoQuery.Filter)
+		case "aggregate":
+			return db.AggregateMongo(targetDB.Name, targetDB.DBName, mongoQuery.Collection, mongoQuery.Pipeline)
 		default:
 			return nil, fmt.Errorf("unsupported Mongo operation: %s", mongoQuery.Operation)
 		}

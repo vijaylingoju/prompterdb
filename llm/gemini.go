@@ -9,86 +9,115 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/vijaylingoju/prompterdb/templates"
+)
+
+const (
+	defaultTimeout = 60 * time.Second
+	geminiAPIURL   = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 )
 
 type Gemini struct {
+	*BaseLLM
 	APIKey string
 	Model  string
+	client *http.Client
 }
 
-func NewGemini(apiKey string, model string) (*Gemini, error) {
+func NewGemini(apiKey, model string) (*Gemini, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("GOOGLE_API_KEY")
-	}
-	if apiKey == "" {
-		return nil, errors.New("❌ missing Google API key")
+		if apiKey == "" {
+			return nil, errors.New("google api key is required (set GOOGLE_API_KEY environment variable or pass as parameter)")
+		}
 	}
 
-	// Check for model env override
 	if model == "" {
-		return nil, errors.New("❌ missing Google model")
+		model = "gemini-pro" // Default model
 	}
 
 	return &Gemini{
-		APIKey: apiKey,
-		Model:  model,
+		BaseLLM: NewBaseLLM("gemini"),
+		APIKey:  apiKey,
+		Model:   model,
+		client: &http.Client{
+			Timeout: defaultTimeout,
+		},
 	}, nil
 }
 
-func (g *Gemini) Name() string {
-	return "gemini"
+func (g *Gemini) SetTemplateManager(tm *templates.TemplateManager) {
+	g.BaseLLM.templateManager = tm
 }
 
-func (g *Gemini) GenerateSQL(prompt string, schema string) (string, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return "", errors.New("prompt is empty")
+// GenerateQuery generates a query based on the provided request
+func (g *Gemini) GenerateQuery(req QueryRequest) (*QueryResponse, error) {
+	if g.templateManager == nil {
+		return nil, errors.New("template manager not set")
 	}
 
-	if g.APIKey == "" || g.Model == "" {
-		return "", errors.New("Gemini configuration is incomplete")
+	prompt, err := g.preparePrompt(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare prompt: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent?key=%s", g.Model, g.APIKey)
+	// Make API request
+	text, err := g.makeAPIRequest(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("API request failed: %w", err)
+	}
 
-	// Construct request body
-	payload := map[string]interface{}{
+	// Process and format the response
+	return g.processResponse(req, text)
+}
+
+// makeAPIRequest sends a request to the Gemini API and returns the response text
+func (g *Gemini) makeAPIRequest(prompt string) (string, error) {
+	url := fmt.Sprintf(geminiAPIURL+"?key=%s", g.Model, g.APIKey)
+
+	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
 			{
 				"parts": []map[string]string{
-					{
-						"text": fmt.Sprintf(
-							"You are a helpful assistant that only returns SQL SELECT queries.\n\nSchema:\n%s\n\nPrompt: %s",
-							schema, prompt),
-					},
+					{"text": prompt},
 				},
 			},
 		},
 	}
 
-	bodyBytes, err := json.Marshal(payload)
+	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request payload: %v", err)
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %v", err)
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := g.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("Gemini API request failed: %v", err)
+		return "", fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Handle errors
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Gemini API error [%d]: %s", resp.StatusCode, string(respBody))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Parse response
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return g.extractTextFromResponse(body)
+}
+
+// extractTextFromResponse extracts the text content from the Gemini API response
+func (g *Gemini) extractTextFromResponse(body []byte) (string, error) {
 	var result struct {
 		Candidates []struct {
 			Content struct {
@@ -99,30 +128,57 @@ func (g *Gemini) GenerateSQL(prompt string, schema string) (string, error) {
 		} `json:"candidates"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode Gemini response: %v", err)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse API response: %w", err)
 	}
 
-	// Validate result
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return "", errors.New("Gemini response was empty or malformed")
+	if len(result.Candidates) == 0 {
+		return "", errors.New("no candidates in API response")
 	}
 
-	query := result.Candidates[0].Content.Parts[0].Text
-	return strings.TrimSpace(query), nil
+	if len(result.Candidates[0].Content.Parts) == 0 {
+		return "", errors.New("no text parts in API response")
+	}
+
+	text := result.Candidates[0].Content.Parts[0].Text
+	text = strings.TrimSpace(text)
+	text = strings.Trim(text, "`")
+	text = strings.TrimSpace(strings.TrimPrefix(text, "sql"))
+
+	return text, nil
 }
 
-func (g *Gemini) GenerateMongoQuery(prompt, schema string) (string, error) {
-	message := fmt.Sprintf(`Given this MongoDB schema:
-%s
+// processResponse processes the API response and formats it according to the request
+func (g *Gemini) processResponse(req QueryRequest, text string) (*QueryResponse, error) {
+	formattedResponse, err := g.formatResponse(req, text, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
 
-Write a JSON query response with this format:
-{
-  "collection": "your_collection",
-  "filter": { /* valid MongoDB filter */ }
-}
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal([]byte(formattedResponse), &responseMap); err != nil {
+		// If we can't parse the response, return a basic response
+		return &QueryResponse{
+			Query:       text,
+			Explanation: "",
+			RawResponse: formattedResponse,
+		}, nil
+	}
 
-Prompt: %s`, schema, prompt)
+	// Create response with default values
+	response := &QueryResponse{
+		Query:       text,
+		Explanation: "",
+		RawResponse: formattedResponse,
+	}
 
-	return g.GenerateSQL(message, schema)
+	// Update from responseMap if available
+	if query, ok := responseMap["query"].(string); ok && query != "" {
+		response.Query = query
+	}
+	if explanation, ok := responseMap["explanation"].(string); ok && explanation != "" {
+		response.Explanation = explanation
+	}
+
+	return response, nil
 }

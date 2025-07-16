@@ -6,11 +6,20 @@ PrompterDB is a Go library that allows you to interact with databases using natu
 
 ## Features
 
-- Natural language to SQL/MongoDB query conversion
-- Support for PostgreSQL and MongoDB databases
-- AI-powered query generation and validation
-- Schema introspection and caching
-- Safe query execution with operation restrictions
+- Natural language to database query conversion
+- Multi-database support:
+  - **PostgreSQL**: Full CRUD operations
+  - **MongoDB**: Full CRUD operations + Aggregation pipeline
+- AI-powered query generation with multiple LLM providers:
+  - Google Gemini
+  - GROQ
+  - OpenAI
+- Query validation and safety features:
+  - Operation whitelisting
+  - Schema validation
+  - Parameter sanitization
+- Debugging tools for LLM interactions
+- Flexible template system for custom prompts
 
 ## Prerequisites
 
@@ -26,18 +35,47 @@ go get github.com/vijaylingoju/prompterdb
 
 ## Configuration
 
-Set the following environment variables:
+### Environment Variables
+
+#### Database Configuration
 
 ```bash
-export GEMINI_API_KEY=your_gemini_api_key
-export GEMINI_MODEL=gemini-2.0-flash
-export POSTGRES_DSN=postgres://user:password@localhost:5432/dbname
-export MONGODB_URI=mongodb://localhost:27017
+# MongoDB
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_NAME=your_database_name
+MONGODB_CONNECTION_NAME=your_connection_name
+
+# PostgreSQL
+POSTGRESDB_URI=postgres://user:password@localhost:5432/your_database
+POSTGRESDB_NAME=your_database_name
+```
+
+#### LLM Providers (at least one required)
+
+```bash
+# Google Gemini
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.0-flash
+
+# GROQ
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4
+```
+
+#### Debugging
+
+```bash
+# Enable detailed LLM debugging (optional)
+DEBUG_LLM=true
 ```
 
 ## Usage
 
-### Basic Usage
+### Basic Example
 
 ```go
 package main
@@ -53,48 +91,68 @@ import (
 )
 
 func main() {
-	//dotenv
+	// Load environment variables from .env file
 	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: go run api/main.go \"your natural language prompt here\"")
+		log.Fatal("Usage: go run main.go \"your natural language query\"")
 	}
 	prompt := os.Args[1]
 
-	// STEP 1: Connect your databases (Postgres and/or Mongo)
-	err := prompterdb.ConnectPostgres("students", "postgres://admin:admin@localhost:5432/students")
+	// 1. Connect to databases
+	err := prompterdb.ConnectPostgres(
+		os.Getenv("POSTGRESDB_NAME"),
+		os.Getenv("POSTGRESDB_URI"),
+	)
 	if err != nil {
 		log.Fatalf("Postgres connect failed: %v", err)
 	}
 
-	err = prompterdb.ConnectMongo("lms", "mongodb://localhost:27017", "lms")
+	err = prompterdb.ConnectMongo(
+		os.Getenv("MONGODB_CONNECTION_NAME"),
+		os.Getenv("MONGODB_URI"),
+		os.Getenv("MONGODB_NAME"),
+	)
 	if err != nil {
 		log.Fatalf("Mongo connect failed: %v", err)
 	}
 
-	// STEP 2: Introspect all schemas (required for LLM)
+	// 2. Introspect database schemas
 	if err := prompterdb.IntrospectAllSchemas(); err != nil {
 		log.Fatalf("Schema introspection failed: %v", err)
 	}
 
-	// STEP 3: Create LLM client (mock or actual)
-	llmClient, err := llm.NewGemini(os.Getenv("GEMINI_API_KEY"), os.Getenv("GEMINI_MODEL"))
-	if err != nil {
-		log.Fatalf("LLM initialization failed: %v", err)
+	// 3. Initialize LLM client (supports Gemini, GROQ, or OpenAI)
+	var llmClient llm.LLM
+	var llmErr error
+
+	// Try to use OpenAI if API key is available
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		llmClient, llmErr = llm.NewOpenAI(apiKey, os.Getenv("OPENAI_MODEL"))
+	} else if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+		llmClient, llmErr = llm.NewGemini(apiKey, os.Getenv("GEMINI_MODEL"))
+	} else if apiKey := os.Getenv("GROQ_API_KEY"); apiKey != "" {
+		llmClient, llmErr = llm.NewGroq(apiKey, os.Getenv("GROQ_MODEL"))
+	} else {
+		log.Fatal("No LLM API key found. Please set one of: OPENAI_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY")
 	}
 
-	// STEP 4: Run the query using your library
+	if llmErr != nil {
+		log.Fatalf("LLM initialization failed: %v", llmErr)
+	}
+
+	// 4. Execute the query
 	results, err := prompterdb.Ask(prompt, llmClient)
 	if err != nil {
-		log.Fatalf("Ask failed: %v", err)
+		log.Fatalf("Query failed: %v", err)
 	}
 
-	// STEP 5: Print the results
+	// 5. Process results
 	fmt.Println("✅ Query Results:")
 	for i, row := range results {
-		fmt.Printf("%d. %v\n", i+1, row)
+		fmt.Printf("%d. %+v\n", i+1, row)
 	}
 }
 
@@ -137,11 +195,11 @@ The library supports two types of databases:
 The library includes built-in validation for both SQL and MongoDB queries:
 
 1. **SQL Validation**
-   - Allowed operations: SELECT, INSERT, UPDATE
+   - Allowed operations: SELECT, INSERT, UPDATE, AGGREGATE
    - Blocked operations: DROP, TRUNCATE, ALTER, DELETE, CREATE, GRANT, REVOKE
 
 2. **MongoDB Validation**
-   - Allowed operations: find, insert, update
+   - Allowed operations: find, insert, update, aggregate
    - Validates query structure and required fields
    - Ensures proper JSON format
 
@@ -156,14 +214,33 @@ The library provides detailed error messages for:
 
 ## Example Queries
 
-```go
-// SQL Examples
-results, err := prompterdb.Ask("Show me the top 10 products by sales", llmClient)
-results, err := prompterdb.Ask("Add a new user with email john@example.com", llmClient)
+### SQL Examples
 
-// MongoDB Examples
-results, err := prompterdb.Ask("Find all users who signed up in the last 30 days", llmClient)
-results, err := prompterdb.Ask("Add a new product with name 'Laptop' and price 1000", llmClient)
+```go
+// Simple SELECT query
+results, err := prompterdb.Ask("get all users with age > 25", llmClient)
+
+// JOIN query
+results, err = prompterdb.Ask("get all orders with customer details", llmClient)
+
+// Aggregation
+results, err = prompterdb.Ask("get total sales by category", llmClient)
+```
+
+### MongoDB Examples
+
+```go
+// Simple find query
+results, err := prompterdb.Ask("find all products with price > 100", llmClient)
+
+// Aggregation pipeline
+results, err = prompterdb.Ask("get average order value by month for the last 6 months", llmClient)
+
+// Complex aggregation with grouping and sorting
+results, err = prompterdb.Ask("find top 5 customers by total spending in 2023", llmClient)
+
+// Text search with projection
+results, err = prompterdb.Ask("search for 'laptop' in products and return only name and price", llmClient)
 ```
 
 ## Security

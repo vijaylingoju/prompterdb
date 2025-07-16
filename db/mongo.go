@@ -220,3 +220,31 @@ func DeleteMongo(name, dbName, collection string, filter map[string]interface{})
 		{"status": "success", "deleted": res.DeletedCount},
 	}, nil
 }
+
+func AggregateMongo(name, dbName, collection string, pipeline []bson.M) ([]map[string]interface{}, error) {
+	if name == "" || dbName == "" || collection == "" {
+		return nil, errors.New("invalid aggregate parameters")
+	}
+
+	mongoMu.RLock()
+	client, ok := MongoClients[name]
+	mongoMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrClientNotFound, name)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := client.Database(dbName).Collection(collection).Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("MongoDB aggregate failed: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []map[string]interface{}
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("failed to decode MongoDB results: %w", err)
+	}
+	return results, nil
+}

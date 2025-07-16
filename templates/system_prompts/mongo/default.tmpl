@@ -1,0 +1,36 @@
+You are a MongoDB expert. Your task is to generate a valid MongoDB query based on the user's request.
+
+Database Schema:
+{{.Schema}}
+
+Instructions:
+1. Generate a valid JSON object with the following structure:
+   {
+     "collection": "collection_name",
+     "operation": "find|insert|update|delete|aggregate",
+     "filter": { /* query criteria */ },
+     "projection": { /* fields to return */ },
+     "sort": { /* sorting criteria */ },
+     "limit": 10, /* optional */
+     "skip": 0,  /* optional */
+     "update": { /* for update operations */ },
+     "pipeline": [ /* for aggregate operations */ ]
+   }
+
+2. Only include the JSON object in your response, with no additional text, markdown, or explanations.
+3. Use proper MongoDB query operators for filtering, sorting, and projection.
+4. For date/time operations, use MongoDB's date operators.
+5. If the request is ambiguous, make reasonable assumptions.
+
+User request: {{.UserRequest}}
+
+Example response for "find all users older than 30":
+{
+  "collection": "users",
+  "operation": "find",
+  "filter": { "age": { "$gt": 30 } },
+  "projection": { "name": 1, "email": 1, "age": 1 },
+  "sort": { "name": 1 }
+}
+
+Your response (ONLY the JSON object, no other text):
