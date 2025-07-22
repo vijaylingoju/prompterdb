@@ -8,6 +8,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/vijaylingoju/prompterdb"
 	"github.com/vijaylingoju/prompterdb/llm"
+	"github.com/vijaylingoju/prompterdb/templates"
 )
 
 func main() {
@@ -64,7 +65,13 @@ func main() {
 		log.Fatalf("Schema introspection failed: %v", err)
 	}
 
-	// STEP 3: Create LLM client (mock or actual)
+	// STEP 3: Create template manager
+	tm := templates.NewTemplateManager()
+	if err := tm.LoadTemplatesFromDir("templates"); err != nil {
+		log.Fatalf("Failed to load templates: %v", err)
+	}
+
+	// STEP 4: Create LLM client (mock or actual)
 	var llmClient llm.LLM
 	var llmErr error
 
@@ -81,6 +88,9 @@ func main() {
 		log.Fatalf("LLM initialization failed: %v", llmErr)
 	}
 
+	// Set the template manager for the LLM client
+	llmClient.SetTemplateManager(tm)
+
 	// STEP 4: Run the query using your library
 	results, err := prompterdb.Ask(prompt, llmClient)
 	if err != nil {
@@ -88,8 +98,25 @@ func main() {
 	}
 
 	// STEP 5: Print the results
-	fmt.Println("✅ Query Results:")
+	fmt.Println("\n✅ Query Results:")
 	for i, row := range results {
 		fmt.Printf("%d. %v\n", i+1, row)
+	}
+
+	// STEP 6: Visualize the results
+	if tm != nil {
+		fmt.Println("\n📊 Visualization:")
+		// Use the default template for visualization
+		widgets, err := prompterdb.Visualize(results, "default", tm, llmClient)
+		if err != nil {
+			log.Printf("Warning: Visualization failed: %v", err)
+		} else {
+			for i, widget := range widgets {
+				fmt.Printf("\nVisualization %d (%s):\n", i+1, widget.Type)
+				fmt.Printf("Title: %s\n", widget.Name)
+				fmt.Printf("Description: %s\n", widget.Description)
+				fmt.Printf("Data: %v\n", widget.Data)
+			}
+		}
 	}
 }

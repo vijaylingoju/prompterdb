@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
+// Ask processes a natural language query and returns the results along with visualization suggestions
 func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error) {
 	if userPrompt == "" {
 		return nil, errors.New("prompt is empty")
@@ -75,13 +76,38 @@ func Ask(userPrompt string, llmClient llm.LLM) ([]map[string]interface{}, error)
 		if isSelect {
 			return db.QueryPostgres(targetDB.Name, query)
 		}
+		// For non-SELECT queries, execute and return the result
 		rowsAffected, err := db.Execute(targetDB.Name, query)
 		if err != nil {
 			return nil, fmt.Errorf("query execution failed: %w", err)
 		}
-		return []map[string]interface{}{
+		results := []map[string]interface{}{
 			{"rows_affected": rowsAffected},
-		}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("query execution failed: %w", err)
+		}
+
+		// If there are results, try to generate visualizations
+		if len(results) > 0 {
+			log.Println("Generating visualization suggestions...")
+			// Initialize template manager
+			tm := templates.NewTemplateManager()
+			if err := tm.LoadTemplatesFromDir("templates"); err != nil {
+				log.Printf("Warning: could not load templates for visualization: %v", err)
+			}
+
+			// Generate visualization suggestions
+			widgets, vizErr := Visualize(results, "default", tm, llmClient)
+			if vizErr != nil {
+				log.Printf("Warning: could not generate visualizations: %v", vizErr)
+			} else if len(widgets) > 0 {
+				log.Println("\n=== Visualization Suggestions ===")
+				PrintWidgetConfig(widgets)
+			}
+		}
+
+		return results, nil
 
 	case config.Mongo:
 		req.QueryType = llm.QueryTypeMongo
